@@ -17,6 +17,12 @@ Installation
         ```
         (see Block2 manual for more details)
 
+* Add PyXray top-level directory to your `PYTHONPATH`
+    e.g. if pyxray_preview is installed in `/opt`, your `PYTHONPATH` should be
+    ```
+    export PYTHONPATH=/opt/pyxray_preview:$PYTHONPATH
+    ```
+
 Reference
 ------------
 https://arxiv.org/abs/2305.08184

@@ -1,6 +1,18 @@
-#!/usr/bin/env python
+#    PyXray: a library for ab-initio X-ray spectrum simulation
+#    Copyright (C) 2023  Seunghoon Lee <seunghoonlee89@gmail.com>
 #
-# Author: Seunghoon Lee <seunghoonlee89@gmail.com>
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 '''
@@ -115,17 +127,14 @@ driver.initialize_system(
     n_exter=n_gexternal, n_act=n_gactive, orb_sym=orb_sym
 )
 
-
-
 # 2-2] Generate mpo 
 from pyxray.utils.integral_helper import somf_integrals, bpsoc_integrals
 if somf:
     h1e, g2e = somf_integrals(h1e, g2e, hso, n_mo) 
 else:
     h1e, g2e = bpsoc_integrals(h1e, g2e, hso, hso2e, n_mo, tol=int_tol) 
-# check Hermitian
-assert np.linalg.norm(h1e - h1e.transpose(1, 0).conj()) < 1e-9
-assert np.linalg.norm(g2e - g2e.transpose(1, 0, 3, 2).conj()) < 1e-9
+assert np.linalg.norm(h1e - h1e.transpose(1, 0).conj()) < 1e-9 # check Hermitian
+assert np.linalg.norm(g2e - g2e.transpose(1, 0, 3, 2).conj()) < 1e-9 # check Hermitian
 mpo = driver.get_qc_mpo(h1e=h1e, g2e=g2e, ecore=ecore, iprint=verbose)
 
 # 2-3] Prepare initial mps 
@@ -158,7 +167,6 @@ mpo.const_e += gs_energy
 from pyxray.utils.integral_helper import spatial_to_spin_integrals
 hr = spatial_to_spin_integrals(hr)
 mpos_dip = [None] * 3
-
 for r in dip_elems:
     ii = dip_dic[r]
     mpos_dip[ii] = driver.get_qc_mpo(h1e=hr[ii], g2e=None, ecore=0, iprint=verbose)

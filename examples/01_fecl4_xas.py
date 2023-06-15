@@ -1,6 +1,18 @@
-#!/usr/bin/env python
+#    PyXray: a library for ab-initio X-ray spectrum simulation
+#    Copyright (C) 2023  Seunghoon Lee <seunghoonlee89@gmail.com>
 #
-# Author: Seunghoon Lee <seunghoonlee89@gmail.com>
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 '''
@@ -212,6 +224,6 @@ if dbg:
     ax.set_xlabel('Incident Energy - %3.1f (eV)' % const_shift)
     ax.set_ylabel('XAS Spectral Function')
     ax.set_xlim([700, 725])
-    #plt.savefig('LedgeXAS_%s_%s_m%d%s.png' % (method, model, bond_dims_cv[-1], dip), dpi=200)
-    plt.show()
+    plt.savefig('LedgeXAS_%s_%s_m%d%s.png' % (method, model, bond_dims_cv[-1], dip), dpi=200)
+    #plt.show()
     

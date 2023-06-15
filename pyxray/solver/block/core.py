@@ -1,3 +1,20 @@
+#    PyXray: a library for ab-initio X-ray spectrum simulation
+#    Copyright (C) 2023  Seunghoon Lee <seunghoonlee89@gmail.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
 import time, os, shutil
 import numpy as np
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes
@@ -94,7 +111,6 @@ class XrayDriver(DMRGDriver):
             self.ghamil = bw.bs.GeneralHamiltonian(
                 self.vacuum, self.n_sites, self.orb_sym, self.heis_twos
             )
-
 
     def get_random_restricted_mps(
         self,

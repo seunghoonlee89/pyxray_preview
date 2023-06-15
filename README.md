@@ -1,7 +1,10 @@
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 PyXray
 ===============================================
 
-A library of X-ray spectrum simulation
+A library of ab-initio X-ray spectrum simulation using correction vector restricted active space approach
 
 Installation
 ------------

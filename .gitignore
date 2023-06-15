@@ -1,8 +1,15 @@
 __pycache__/
 *.py[cod]
 build/
+nodex*
+slurm*
+*test*
 *.molden
+*.h5
+*.out
+*.sh
 *.png
+result*
 CMakeCache.txt
 CMakeFiles
 Makefile

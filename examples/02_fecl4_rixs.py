@@ -4,18 +4,18 @@
 #
 
 '''
-An example to run L-edge XAS spectrum calculation. 
+An example to run 2p3d RIXS spectrum calculation. 
 '''
 
 #==================================================================
-# 0. Initial Settings for Ledge XAS 
+# 0. Initial Settings for 2p3d RIXS 
 #==================================================================
 # parameters for calculation
 model = 'feII_8o12e_lunoloc'
 #model = 'feIII_8o11e_lunoloc'
-method = 'casci'
+method = 'mrcis'
 somf = True 
-dip_elems = ['x', 'y', 'z'] 
+pol_elems = ['xx', 'xy', 'xz', 'yx', 'yy', 'yz', 'zx', 'zy', 'zz'] 
 
 # parameters for system
 scratch = './nodex_%s' % model
@@ -40,16 +40,19 @@ bond_dims_cv = [500] * n_sweeps_cv
 noises_cv = [1e-4] * (n_sweeps_cv - 14) + [0.] * 6 
 thrds_cv = [1e-4] * n_sweeps_cv
 
-# parameters for XAS
+# parameters for RIXS
 import numpy as np
 from pyscf.data import nist
 HARTREE2EV = nist.HARTREE2EV  
-freqs_gap = 0.1
-freq_min = 705
-freq_max = 735
-freqs = np.arange(freq_min, freq_max + 1e-5, freqs_gap)
-freqs /= HARTREE2EV
-etas = np.array([0.3] * len(freqs)) / HARTREE2EV
+fmax_l3xas = 714.5 if 'feII_' in model else 715.5
+freqs_ex = np.array([fmax_l3xas]) / HARTREE2EV
+etas_ex = np.array([0.3]) / HARTREE2EV
+freqs_sc_gap = 0.02
+freq_sc_min = 0 
+freq_sc_max = 6.6 
+freqs_sc = np.arange(freq_sc_min, freq_sc_max + 1e-5, freqs_sc_gap)
+freqs_sc /= HARTREE2EV
+etas_sc = np.array([0.1] * len(freqs_sc)) / HARTREE2EV
 
 #==================================================================
 # 1. Generate Active Space Model 
@@ -112,6 +115,8 @@ driver.initialize_system(
     n_exter=n_gexternal, n_act=n_gactive, orb_sym=orb_sym
 )
 
+
+
 # 2-2] Generate mpo 
 from pyxray.utils.integral_helper import somf_integrals, bpsoc_integrals
 if somf:
@@ -125,7 +130,7 @@ mpo = driver.get_qc_mpo(h1e=h1e, g2e=g2e, ecore=ecore, iprint=verbose)
 
 # 2-3] Prepare initial mps 
 mps_gs = driver.get_random_restricted_mps(
-             tag="GS", bond_dim=bond_dims_gs[0], n_hole=0
+             tag="GS", bond_dim=bond_dims_gs[0], n_hole=0, nrank_mrci=1,
          )
 
 # 2-4] Solve ground-state problem
@@ -134,28 +139,38 @@ gs_energy = driver.dmrg(mpo, mps_gs, n_sweeps=n_sweeps_gs, bond_dims=bond_dims_g
 print('DMRG energy = %20.15f' % gs_energy)
 
 #==================================================================
-# 3. Solve Response Problem:
-#    (w - (H-E_0) + i eta) |A> = mu |Psi0>
+# 3. Solve Response Problem 1:
+#    (w_ex - (H-E_0) + i eta_ex) |A> = mu |Psi0>
 #==================================================================
 dip_dic = {'x': 0, 'y': 1, 'z': 2}
+dip_elems = list(set([r for r1r2 in pol_elems for r in r1r2]))
+dip_elems_ex = list(set([r1r2[0] for r1r2 in pol_elems]))
+assert len(dip_elems_ex) > 0 and len(dip_elems_ex) <= 3 
+assert len(set(dip_elems_ex) - set(['x', 'y', 'z'])) == 0
+assert len(dip_elems) > 0 and len(dip_elems) <= 3 
+assert len(set(dip_elems) - set(['x', 'y', 'z'])) == 0
+for r1r2 in pol_elems:
+    assert len(r1r2) == 2
+
 # 3-1] Generate mpo 
 mpo = -1.0 * mpo
 mpo.const_e += gs_energy 
 from pyxray.utils.integral_helper import spatial_to_spin_integrals
 hr = spatial_to_spin_integrals(hr)
 mpos_dip = [None] * 3
-for r in dip_elems: # loop for x, y, z
+
+for r in dip_elems:
     ii = dip_dic[r]
     mpos_dip[ii] = driver.get_qc_mpo(h1e=hr[ii], g2e=None, ecore=0, iprint=verbose)
 
 # 3-2] Prepare initial mps for |A> 
 mpss_a = [None] * 3
-for r in dip_elems: # loop for x, y, z
+for r in dip_elems_ex:
     ii = dip_dic[r]
     mpss_a[ii] = driver.get_random_restricted_mps(
-                    tag="MUKET%d" % ii, bond_dim=bond_dims_cps[0], n_hole=1
+                    tag="MUKET%d" % ii, bond_dim=bond_dims_cps[0], 
+                    n_hole=1, nrank_mrci=1
                  )
-
     driver.comp_gf(
         mpss_a[ii], mpos_dip[ii], mps_gs, n_sweeps=n_sweeps_cps,
         bra_bond_dims=bond_dims_cps,
@@ -163,55 +178,97 @@ for r in dip_elems: # loop for x, y, z
         thrds=thrds_cps, save_tag="MUKET%d" % ii
     )
 
-# 3-3] Solve response problem
-gf_mat = np.zeros((3, len(freqs)), dtype=complex)
-for r in dip_elems: # loop for x, y, z
+# 3-3] Solve response problem 1
+for r in dip_elems_ex:
     ii = dip_dic[r]
-    gf_mat[ii], _ = driver.linear_gf(
-                        mpo, mpss_a[ii], mpos_dip[ii], mps_gs, freqs, etas,
-                        bra_bond_dims=bond_dims_cv, bond_dims=bond_dims_cps[-1:], 
-                        noises=noises_cv, n_sweeps=n_sweeps_cv, 
-                        thrds=thrds_cv, save_tag="A%d" % ii, iprint=verbose
-                    )
+    driver.linear_gf(
+        mpo, mpss_a[ii], mpos_dip[ii], mps_gs, freqs_ex, etas_ex,
+        bra_bond_dims=bond_dims_cv, bond_dims=bond_dims_cps[-1:], 
+        noises=noises_cv, n_sweeps=n_sweeps_cv, 
+        thrds=thrds_cv, save_tag="A%d" % ii, iprint=verbose
+    )
 
 #==================================================================
-# 4. Compute XAS Spectral Function 
+# 4. Solve Response Problem 2:
+#    (w_sc - (H-E_0) + i eta_sc) |B> = mu |A>
+#    where w_sc = w_ex - w_em
 #==================================================================
-spect_func = (-1 / np.pi) * gf_mat.imag.sum(axis=0)
-print("spectral function for XAS = ", spect_func)
+
+gf_mat = np.zeros((3, 3, len(freqs_ex), len(freqs_sc)), dtype=complex)
+# 4-1] Solve response problem 2 
+mpss_b = [None] * 3
+for r1r2 in pol_elems:
+    ii = dip_dic[r1r2[0]]
+    jj = dip_dic[r1r2[1]]
+    for iw in range(len(freqs_ex)):
+        w1 = freqs_ex[iw]
+        # 4-1-1] load mps for |A>
+        tag = 'A%d_%d' % (ii, iw)
+        mps_a = driver.load_mps(tag)
+
+        # 4-1-2] Prepare initial mps for |B> 
+        mpss_b[jj] = driver.get_random_restricted_mps(
+                        tag="B%d" % jj, bond_dim=bond_dims_cps[0],
+                        n_hole=0, nrank_mrci=1
+                     )
+
+        driver.comp_gf(
+            mpss_b[jj], mpos_dip[jj], mps_a, n_sweeps=n_sweeps_cps,
+            bra_bond_dims=bond_dims_cps,
+            bond_dims=[mps_a.info.bond_dim],
+            thrds=thrds_cps, save_tag="MUA%d_%d_%d" % (ii, jj, iw) 
+        )
+
+        # 4-1-3] Solve response problem 2 
+        gf_mat[ii, jj, iw], _ = driver.linear_gf(
+                            mpo, mpss_b[jj], mpos_dip[jj], mps_a, freqs_sc, etas_sc,
+                            bra_bond_dims=bond_dims_cv, bond_dims=bond_dims_cv[-1:], 
+                            noises=noises_cv, n_sweeps=n_sweeps_cv, 
+                            thrds=thrds_cv, save_tag="B%d_%d_%d" % (ii, jj, iw), iprint=verbose
+                        )
+
+#==================================================================
+# 4. Compute RIXS Cross Section
+#==================================================================
+cross_section = - 16 / 9 * np.pi * gf_mat.imag.sum(axis=(0,1)) 
+c4 = m_fecl4.LIGHT_SPEED**4
+for iex, fex in enumerate(freqs_ex):
+    for isc, fsc in enumerate(freqs_sc):
+        fem = fex - fsc
+        cross_section[iex, isc] *= fem ** 3 * fex / c4 
+print("cross section for RIXS = ", cross_section)
 
 # dump the results
+pol = ''
+for r1r2 in pol_elems:
+    pol += '_' + r1r2
 import h5py
-dip = ''
-for r in dip_elems:
-    dip += '_' + r
-dump_filename = "result_%s_%s_m%d%s.h5" % (method, model, bond_dims_cv[-1], dip)
-ff = h5py.File(dump_filename, "w")
-ff.create_dataset('omega', data=freqs * HARTREE2EV)
-ff.create_dataset('spectral_function', data=spect_func)
+ff = h5py.File("result_%s_%s_m%d%s.h5"%(method, model, bond_dims_cv[-1], pol),"w")
+ff.create_dataset('omega_ex', data=freqs_ex * HARTREE2EV)
+ff.create_dataset('omega_sc', data=freqs_sc * HARTREE2EV)
+ff.create_dataset('cross_section', data=cross_section)
 ff.create_dataset('gfmat', data=gf_mat)
 ff.close() 
 
 if dbg:
     #==================================================================
-    # 5. Plot XAS spectrum 
+    # 5. Plot RIXS spectrum 
     #==================================================================
     import h5py
-    dip = ''
-    for r in dip_elems:
-        dip += '_' + r
-    dump_filename = "result_%s_%s_m%d%s.h5" % (method, model, bond_dims_cv[-1], dip)
+    pol = ''
+    for r1r2 in pol_elems:
+        pol += '_' + r1r2
+    dump_filename = "result_%s_%s_m%d%s.h5" % (method, model, bond_dims_cv[-1], pol)
     ff = h5py.File(dump_filename, "r")
-    freqs = np.array(ff['omega'])
-    spect_func = np.array(ff['spectral_function'])
+    freqs_sc = np.array(ff['omega_sc'])
+    cross_section = np.array(ff['cross_section'])
 
-    const_shift = 7.4
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(15,6))
-    ax.plot(freqs - const_shift, spect_func, '-o', color='black', markersize=2)
-    ax.set_xlabel('Incident Energy - %3.1f (eV)' % const_shift)
-    ax.set_ylabel('XAS Spectral Function')
-    ax.set_xlim([700, 725])
-    #plt.savefig('LedgeXAS_%s_%s_m%d%s.png' % (method, model, bond_dims_cv[-1], dip), dpi=200)
-    plt.show()
+    ax.plot(freqs_sc, cross_section[0], '-o', color='black', markersize=2)
+    ax.set_xlabel('Energy transfer (eV)')
+    ax.set_ylabel('RIXS cross section')
+    ax.set_xlim([0, 6.5])
+    plt.savefig('2p3dRIXS_%s_%s_m%d%s.png' % (method, model, bond_dims_cv[-1], pol), dpi=200)
+    #plt.show()
     

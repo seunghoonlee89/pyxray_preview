@@ -25,11 +25,10 @@ class ActiveSpaceModel():
         self.HARTREE2EV = nist.HARTREE2EV
         self.LIGHT_SPEED = nist.LIGHT_SPEED   # in a.u.
         self.n_core = None 
-        self.n_inactive = None 
         self.n_active = None 
-        self.n_external = None 
+        self.n_inactive = 0 
+        self.n_external = 0 
         self.init_sys = False 
-        self.n_pcore = None 
 
     def gen_mol(self, verbose=5):
         if 'feII_' in self.model:
@@ -197,7 +196,8 @@ Cl    D
                     nb = len(act0) + 1
                     act_2p = act0
                     act_3d = act1
-                    self.n_pcore = len(act0) 
+                    self.n_core = len(act0) 
+                    self.n_active = len(act1) 
                 else:
                     assert False
             else:
@@ -212,7 +212,8 @@ Cl    D
                     nb = len(act0)
                     act_2p = act0
                     act_3d = act1
-                    self.n_pcore = len(act0) 
+                    self.n_core = len(act0) 
+                    self.n_active = len(act1) 
                 else:
                     assert False
             else:
@@ -222,19 +223,17 @@ Cl    D
 
         if method == 'mrcis':
             if 'feIII_' in model and '_lunoloc' in model:
-                sigmap = [34,35,36,37] # cl 3p 
+                sigmap = [34,35,36,37] # fe-cl sigma 
                 inact_idx = sigmap
                 virt_idx = [] 
             elif 'feII_' in model and '_lunoloc' in model:
-                sigmap = [34,35,36,37] # cl 3p 
+                sigmap = [34,35,36,37] # fe-cl sigma 
                 inact_idx = sigmap
                 virt_idx = [] 
             else:
                 assert False
 
-            self.n_core = 3
             self.n_inactive = len(inact_idx)
-            self.n_active = len(idx) - self.n_core 
             self.n_external = len(virt_idx) 
             idx = act_2p + inact_idx + virt_idx + act_3d
             na += len(inact_idx)

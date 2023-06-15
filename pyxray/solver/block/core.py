@@ -33,6 +33,69 @@ class XrayDriver(DMRGDriver):
             os.mkdir(save_dir)
         self.verbose = verbose
 
+    def initialize_system(
+        self,
+        n_sites,
+        n_elec,
+        spin,
+        n_core,
+        n_inact,
+        n_exter,
+        n_act,
+        pg_irrep=None,
+        orb_sym=None,
+        heis_twos=-1,
+        heis_twosz=0,
+        singlet_embedding=True,
+        pauli_mode=False,
+    ):
+        bw = self.bw
+        import numpy as np
+
+        self.vacuum = bw.SX(0, 0, 0)
+        if heis_twos != -1 and bw.SX == bw.b.SU2 and n_elec == 0:
+            n_elec = n_sites * heis_twos
+        elif heis_twos == 1 and SymmetryTypes.SGB in bw.symm_type and n_elec != 0:
+            n_elec = 2 * n_elec - n_sites
+        if pg_irrep is None:
+            if hasattr(self, "pg_irrep"):
+                pg_irrep = self.pg_irrep
+            else:
+                pg_irrep = 0
+        if not SymmetryTypes.SU2 in bw.symm_type or heis_twos != -1:
+            singlet_embedding = False
+        if singlet_embedding:
+            assert heis_twosz == 0
+            self.target = bw.SX(n_elec + spin % 2, 0, pg_irrep)
+            self.left_vacuum = bw.SX(spin % 2, spin, 0)
+        else:
+            self.target = bw.SX(
+                n_elec if heis_twosz == 0 else heis_twosz, spin, pg_irrep
+            )
+            self.left_vacuum = self.vacuum
+        self.n_sites = n_sites
+        self.heis_twos = heis_twos
+        self.n_elec = n_elec
+        self.spin = spin
+        self.n_core = n_core
+        self.n_inact = n_inact
+        self.n_exter = n_exter
+        self.n_act = n_act
+        if orb_sym is None:
+            self.orb_sym = bw.b.VectorUInt8([0] * self.n_sites)
+        else:
+            if np.array(orb_sym).ndim == 2:
+                self.orb_sym = bw.b.VectorUInt8(list(orb_sym[0]) + list(orb_sym[1]))
+            else:
+                self.orb_sym = bw.b.VectorUInt8(orb_sym)
+        if pauli_mode:
+            self.ghamil = self.get_pauli_hamiltonian()
+        else:
+            self.ghamil = bw.bs.GeneralHamiltonian(
+                self.vacuum, self.n_sites, self.orb_sym, self.heis_twos
+            )
+
+
     def get_random_restricted_mps(
         self,
         tag,
@@ -44,8 +107,7 @@ class XrayDriver(DMRGDriver):
         occs=None,
         full_fci=False,
         left_vacuum=None,
-        casci_ncore=0,
-        casci_nvirt=0,
+        nrank_mrci=0,
         n_hole=None,
         orig_dot=False,
     ):
@@ -55,21 +117,9 @@ class XrayDriver(DMRGDriver):
         if left_vacuum is None:
             left_vacuum = self.left_vacuum
         if nroots == 1:
-            if (casci_ncore == 0 and casci_nvirt == 0) or n_hole is not None:
-                mps_info = bw.brs.MPSInfo(
-                    self.n_sites, self.vacuum, target, self.ghamil.basis
-                )
-            else:
-                casci_ncas = self.n_sites - casci_ncore - casci_nvirt
-                mps_info = bw.brs.CASCIMPSInfo(
-                    self.n_sites,
-                    self.vacuum,
-                    target,
-                    self.ghamil.basis,
-                    casci_ncore,
-                    casci_ncas,
-                    casci_nvirt,
-                )
+            mps_info = bw.brs.MPSInfo(
+                self.n_sites, self.vacuum, target, self.ghamil.basis
+            )
             mps = bw.bs.MPS(self.n_sites, center, dot if orig_dot else 1)
         else:
             targets = bw.VectorSX([target]) if isinstance(target, bw.SX) else target
@@ -82,9 +132,9 @@ class XrayDriver(DMRGDriver):
             mps_info.set_bond_dimension_full_fci(left_vacuum, self.vacuum)
         else:
             mps_info.set_bond_dimension_fci(left_vacuum, self.vacuum)
-        if n_hole is not None and casci_ncore > 0:
-            self.restrict_core(
-                mps_info, target, n_hole=n_hole, nc=casci_ncore
+        if n_hole is not None and self.n_core > 0:
+            self.restrict_active_space(
+                mps_info, nrank_mrci, n_hole, target
             )
         if occs is not None:
             mps_info.set_bond_dimension_using_occ(bond_dim, bw.b.VectorDouble(occs))
@@ -107,89 +157,91 @@ class XrayDriver(DMRGDriver):
         #mps.deallocate()
         #mps_info.deallocate_mutable()
         return mps
-    
-    def restrict_core(self, info, target, n_hole=1, nc=6, verbose=None):
+
+    def restrict_active_space(self, info, nrank, nhole, target, verbose=None):
         if verbose is None:
             verbose = self.verbose
+        n_sites = info.n_sites
+        nelec = self.n_elec
+
         if verbose >= 2:
             print('org mps_info left_dims_fci')
-            for i in range(self.n_sites+1):
+            for i in range(n_sites + 1):
                 print(info.left_dims_fci[i])
             print('org mps_info right_dims_fci')
-            for i in range(self.n_sites+1):
+            for i in range(n_sites + 1):
                 print(info.right_dims_fci[i])
-        n_sites = info.n_sites
-        max_ns = []
-        for i in range(nc):
-            dims = info.left_dims_fci[i + 1]
-            max_n = 0
-            for q in range(dims.n):
-                if (dims.quanta[q].n > max_n):
-                    max_n = dims.quanta[q].n 
-            max_ns.append(max_n)
-        for i in range(nc-1):
-            dims = info.left_dims_fci[i + 1]
-            max_n = max_ns[i]
-            for q in range(dims.n):
-                if dims.quanta[q].n < max_n - n_hole:
-                    dims.n_states[q] = 0
-        i = nc-1 
-        dims = info.left_dims_fci[i + 1]
-        max_n = max_ns[i]
-        for q in range(dims.n):
-            if dims.quanta[q].n != max_n - n_hole:
-                dims.n_states[q] = 0
 
-        #for i in range(nc, n_sites):
-        #    dims = info.left_dims_fci[i + 1]
-        #    for q in range(dims.n):
-        #        if dims.quanta[q].n < max_n - n_hole:
-        #            dims.n_states[q] = 0
+        def restrict_qn(i, dims_fci, conds):
+            dims = dims_fci[i]
+            for cond in conds:
+                for q in range(dims.n):
+                    if cond(dims.quanta[q].n):
+                        dims.n_states[q] = 0
 
-        #for k in range(nc, n_sites):
-        #    info.left_dims_fci[k + 1] = StateInfo.tensor_product_ref(
-        #        info.left_dims_fci[k], hamil.basis[k], info.left_dims_fci[k + 1])
-        min_ns = []
-        for i in range(nc):
-            dims = info.right_dims_fci[i + 1]
-            min_n = info.right_dims_fci[0].quanta[0].n
-            for q in range(dims.n):
-                if (dims.quanta[q].n < min_n):
-                    min_n = dims.quanta[q].n 
-            min_ns.append(min_n)
-        for i in range(nc-1):
-            dims = info.right_dims_fci[i + 1]
-            min_n = min_ns[i]
-            for q in range(dims.n):
-                if dims.quanta[q].n > min_n + n_hole:
-                    dims.n_states[q] = 0
-        i = nc-1 
-        dims = info.right_dims_fci[i + 1]
-        min_n = min_ns[i]
-        for q in range(dims.n):
-            if dims.quanta[q].n != min_n + n_hole:
-                dims.n_states[q] = 0
+        # left dim fci
+        nc   = self.n_core
+        nci  = nc + self.n_inact
+        ncie = nci + self.n_exter
+        nciea= ncie + self.n_act
 
-        #for i in range(nc, n_sites):
-        #    dims = info.right_dims_fci[i + 1]
-        #    for q in range(dims.n):
-        #        if dims.quanta[q].n > min_n + n_hole:
-        #            dims.n_states[q] = 0
+        kp = np.array([0, nc, nci, ncie, nciea])
+        nminp = np.array([0, nc-nhole, nci-nhole-nrank, nci-nhole-nrank, nelec])
+        nmaxp = np.array([0, nc-nhole, nci-nhole, nci-nhole+nrank, nelec])
+
+        for i in range(n_sites + 1):
+            idx = np.argwhere(np.array(kp < i) == False).flatten()[0] - 1
+            ip = i - kp[idx]
+
+            if idx < 0:
+                min_idx = max_idx = 0
+            else:
+                min_idx = np.maximum(nminp[idx], nminp[idx+1] - (kp[idx+1] - kp[idx] - ip))
+                max_idx = np.minimum(nmaxp[idx+1], nmaxp[idx] + ip)
+
+            cond1 = lambda n: n < min_idx 
+            cond2 = lambda n: n > max_idx 
+            restrict_qn(i, info.left_dims_fci, [cond1, cond2])
+
+        # right dim fci
+        na   = self.n_act
+        nae  = na + self.n_exter
+        naei = nae + self.n_inact
+        naeic= naei + self.n_core
+        ne_a = nelec - self.n_core - self.n_inact
+        ne_ai= ne_a + self.n_inact 
+
+        kp = np.array([0, na, nae, naei, naeic])
+        nminp = np.array([0, ne_a+nhole-nrank, ne_a+nhole, ne_ai+nhole, nelec])
+        nmaxp = np.array([0, ne_a+nhole+nrank, ne_a+nhole+nrank, ne_ai+nhole, nelec])
+
+        for i in range(n_sites + 1):
+            idx = np.argwhere(np.array(kp < i) == False).flatten()[0] - 1
+            ip = i - kp[idx]
+
+            if idx < 0:
+                min_idx = max_idx = 0
+            else:
+                min_idx = np.maximum(nminp[idx], nminp[idx+1] - (kp[idx+1] - kp[idx] - ip))
+                max_idx = np.minimum(nmaxp[idx+1], nmaxp[idx] + ip)
+
+            cond1 = lambda n: n < min_idx 
+            cond2 = lambda n: n > max_idx 
+            restrict_qn(n_sites - i, info.right_dims_fci, [cond1, cond2])
 
         for ldf, rdf in zip(info.left_dims_fci, info.right_dims_fci):
             #StateInfo.filter(ldf, rdf, target)
             #StateInfo.filter(rdf, ldf, target)
             ldf.collect()
             rdf.collect()
-
         if verbose >= 2:
-            print('ledge mps_info left_dims_fci')
+            print('mrci mps_info left_dims_fci')
             for i in range(self.n_sites+1):
                 print(info.left_dims_fci[i])
-            print('ledge mps_info right_dims_fci')
+            print('mrci mps_info right_dims_fci')
             for i in range(self.n_sites+1):
                 print(info.right_dims_fci[i])
-
+ 
     def comp_gf(
         self,
         bra,
@@ -365,7 +417,7 @@ class XrayDriver(DMRGDriver):
         ex_gf_mats = [np.zeros((len(ex_fs)), dtype=complex) for ex_fs in extra_freqs]
         for iw, (w, xw) in enumerate(zip(freqs, extra_freqs)):
             if iprint >= 2:
-                print('>>> START RESPONSE EQUATION1: %s, OMEGA_EX = %10.5f <<<' % (save_tag, w))
+                print('>>> START RESPONSE EQUATION FOR %s, OMEGA = %10.5f <<<' % (save_tag, w))
                 t = time.perf_counter()
 
             linear.tme = None
@@ -399,10 +451,11 @@ class XrayDriver(DMRGDriver):
             if self.mpi is None or self.mpi.rank == 0:
                 cp_rket.info.save_data(self.scratch + "/%s_%d-mps_info.bin" % (save_tag, iw))
                 if self.save_dir is not None:
-                    print('>>>   Saving |%s-%d>   <<<' 
+                    print('>>>   Saving |%s_%d>   <<<' 
                            % (save_tag, iw))
                     self.save_mps("%s_%d" % (save_tag, iw), self.save_dir)
 
+            #TODO: mid_site where bond dimension maximum
             if self.symm_type != SymmetryTypes.SGFCPX: 
                 min_site = np.argmin(np.array(linear.sweep_targets)[:, 1])
                 mid_site = len(np.array(linear.sweep_targets)[:, 1]) // 2
@@ -414,23 +467,8 @@ class XrayDriver(DMRGDriver):
                 min_site = ket.n_sites - 2 - min_site
                 mid_site = ket.n_sites - 2 - mid_site
 
-            #if 'mrci' in method:
-            #    mid_site = self.n_core + self.n_inactive \
-            #             + self.n_external + self.n_active // 2 - 5 
-
             print("GF.IMAG MIN SITE = %4d" % min_site)
             print("GF.IMAG MID SITE = %4d" % mid_site)
-
-            if len(xw) != 0:
-                forward = ket.center == 0
-                linear.noises = bw.VectorFP(noises[-1:])
-                linear.bra_bond_dims = bw.b.VectorUBond(bond_dims[-1:])
-                linear.gf_extra_omegas_at_site = mid_site
-                if self.symm_type != SymmetryTypes.SGFCPX: 
-                    linear.gf_extra_omegas = bw.b.VectorDouble(xw)
-                else: 
-                    linear.gf_extra_omegas = bw.b.VectorComplexDouble(xw)
-                linear.solve(1, ket.center == 0, 0)
 
             # take middle site GF
             if ket.center == 0:
@@ -444,27 +482,37 @@ class XrayDriver(DMRGDriver):
                 rgf = tmp.real
                 igf = tmp.imag
             gf_mat[iw] = rgf + 1j * igf
-            #dmain, dseco, imain, iseco = Global.frame.peak_used_memory
 
             if iprint >= 1:
                 print("=== %s (OMEGA = %10.5f ) = RE %20.15f + IM %20.15f === T = %7.2f" %
                        (save_tag, w, rgf, igf, time.perf_counter() - t))
 
-            for ixw in range(len(xw)):
-                tmp = np.array(linear.gf_extra_targets[ixw])
-
+            if len(xw) != 0:
+                forward = ket.center == 0
+                linear.noises = bw.VectorFP(noises[-1:])
+                linear.bra_bond_dims = bw.b.VectorUBond(bond_dims[-1:])
+                linear.gf_extra_omegas_at_site = mid_site
                 if self.symm_type != SymmetryTypes.SGFCPX: 
-                    xrgf, xigf = tmp
+                    linear.gf_extra_omegas = bw.b.VectorDouble(xw)
                 else: 
-                    xrgf = tmp.real
-                    xigf = tmp.imag
-                ex_gf_mats[iw][ixw] = xrgf + 1j * xigf
-                if iprint >= 1:
-                    print("=== EXT %s (OMEGA = %10.5f ) = RE %20.15f + IM %20.15f === T = %7.2f" %
-                        (save_tag, xw[ixw], xrgf, xigf, 0))
+                    linear.gf_extra_omegas = bw.b.VectorComplexDouble(xw)
+                linear.solve(1, ket.center == 0, 0)
+
+                for ixw in range(len(xw)):
+                    tmp = np.array(linear.gf_extra_targets[ixw])
+    
+                    if self.symm_type != SymmetryTypes.SGFCPX: 
+                        xrgf, xigf = tmp
+                    else: 
+                        xrgf = tmp.real
+                        xigf = tmp.imag
+                    ex_gf_mats[iw][ixw] = xrgf + 1j * xigf
+                    if iprint >= 1:
+                        print("=== EXT %s (OMEGA = %10.5f ) = RE %20.15f + IM %20.15f === T = %7.2f" %
+                            (save_tag, xw[ixw], xrgf, xigf, 0))
 
             if iprint >= 2:
-                print('>>> COMPLETE %s OMEGA = %10.5f | Time = %.2f <<<' %
+                print('>>> COMPLETE RESPONSE EQUATION FOR %s OMEGA = %10.5f | Time = %.2f <<<' %
                        (save_tag, w, time.perf_counter() - t))
 
         if self.clean_scratch:
